@@ -1,0 +1,95 @@
+hadoop version
+python3 --version
+hadoop fs -ls /
+
+start-dfs.sh
+start-yarn.sh
+jps
+
+mkdir -p ~/wordcount_lab
+cd ~/wordcount_lab
+
+cat > wordcount.txt <<'EOF'
+Hadoop is a distributed framework
+Hadoop is used for big data processing
+Python works with Hadoop streaming
+Hadoop makes data processing easier
+EOF
+
+cat > mapper.py <<'PY'
+import sys
+import re
+
+for line in sys.stdin:
+    words = re.findall(r"\w+", line.lower())
+
+    for word in words:
+        print(f"{word}\t1")
+PY
+
+cat > reducer.py <<'PY'
+import sys
+
+current_word = None
+total = 0
+
+for line in sys.stdin:
+    line = line.rstrip("\r\n")
+
+    if not line:
+        continue
+
+    word, count = line.split("\t", 1)
+    count = int(count)
+
+    if current_word is not None and word != current_word:
+        print(f"{current_word}\t{total}")
+        total = 0
+
+    current_word = word
+    total += count
+
+if current_word is not None:
+    print(f"{current_word}\t{total}")
+PY
+
+chmod +x mapper.py reducer.py
+
+cat wordcount.txt | python3 mapper.py | LC_ALL=C sort | python3 reducer.py
+
+if [ -z "${HADOOP_HOME:-}" ]; then
+    HADOOP_BIN=$(readlink -f "$(command -v hadoop)")
+    HADOOP_HOME=$(dirname "$(dirname "$HADOOP_BIN")")
+fi
+
+export HADOOP_HOME
+
+STREAMING_JAR=$(find "$HADOOP_HOME" -type f -name 'hadoop-streaming*.jar' ! -name '*-sources.jar' ! -path '*/sources/*' -print -quit 2>/dev/null)
+
+echo "$STREAMING_JAR"
+
+if [ -z "$STREAMING_JAR" ]; then
+    echo "ERROR: Hadoop Streaming binary JAR not found."
+else
+    echo "Hadoop Streaming JAR found successfully."
+fi
+
+hadoop fs -rm -r -f /wordcount_input
+hadoop fs -rm -r -f /wordcount_output
+
+hadoop fs -mkdir /wordcount_input
+
+hadoop fs -put -f wordcount.txt /wordcount_input/
+
+hadoop fs -ls /wordcount_input
+
+hadoop jar "$STREAMING_JAR" \
+-D mapreduce.job.reduces=1 \
+-files "$PWD/mapper.py,$PWD/reducer.py" \
+-mapper "python3 mapper.py" \
+-reducer "python3 reducer.py" \
+-input /wordcount_input \
+-output /wordcount_output
+
+hadoop fs -ls /wordcount_output
+hadoop fs -cat /wordcount_output/part-*
