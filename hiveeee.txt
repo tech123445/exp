@@ -1,0 +1,344 @@
+HIVE 3.1.2 INSTALLATION AND PRACTICAL EXAMPLES
+For Ubuntu/Linux with Hadoop 3.2.3 and Java 8
+
+Run the numbered steps in order. Commands marked "Ubuntu terminal" are run at the normal Linux prompt. HiveQL commands are run only after the prompt changes to hive>.
+
+STEP 1 - CHECK JAVA, HADOOP AND WGET
+Ubuntu terminal:
+
+java -version
+javac -version
+hadoop version
+command -v hadoop
+command -v wget
+
+If wget is missing, install it:
+
+sudo apt update
+sudo apt install -y wget
+
+Use Java 8 for this Hive 3.1.2 setup. If Java 8 is already installed but another Java version is selected, choose Java 8:
+
+sudo update-alternatives --config java
+sudo update-alternatives --config javac
+
+Check the selected versions:
+
+java -version
+javac -version
+
+STEP 2 - START HADOOP
+Ubuntu terminal:
+
+start-dfs.sh
+start-yarn.sh
+jps
+hadoop fs -ls /
+
+In a normal single-node setup, jps should show NameNode, DataNode, ResourceManager and NodeManager. Continue only after HDFS is running correctly.
+
+STEP 3 - FIND JAVA AND HADOOP PATHS
+Ubuntu terminal:
+
+JAVA_BIN=$(readlink -f "$(command -v javac)")
+export JAVA_HOME=$(dirname "$(dirname "$JAVA_BIN")")
+
+HADOOP_BIN=$(readlink -f "$(command -v hadoop)")
+export HADOOP_HOME=$(dirname "$(dirname "$HADOOP_BIN")")
+
+export HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
+
+echo "$JAVA_HOME"
+echo "$HADOOP_HOME"
+echo "$HADOOP_CONF_DIR"
+hadoop version
+
+STEP 4 - DOWNLOAD HIVE 3.1.2
+Ubuntu terminal:
+
+cd "$HOME"
+
+wget -c "https://mirrors.huaweicloud.com/repository/apache/hive/hive-3.1.2/apache-hive-3.1.2-bin.tar.gz"
+
+STEP 5 - EXTRACT HIVE
+Ubuntu terminal:
+
+cd "$HOME"
+
+if [ ! -d "$HOME/apache-hive-3.1.2-bin" ]; then
+    tar -xzf apache-hive-3.1.2-bin.tar.gz
+fi
+
+ls "$HOME/apache-hive-3.1.2-bin"
+
+STEP 6 - CONFIGURE HIVE ENVIRONMENT
+Ubuntu terminal:
+
+if ! grep -q '^# HIVE_3_1_2_CONFIGURATION$' "$HOME/.bashrc"; then
+    cat >> "$HOME/.bashrc" <<'EOF'
+# HIVE_3_1_2_CONFIGURATION
+export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+export HADOOP_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v hadoop)")")")"
+export HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
+export HIVE_HOME="$HOME/apache-hive-3.1.2-bin"
+export HIVE_CONF_DIR="$HIVE_HOME/conf"
+export PATH="$HIVE_HOME/bin:$PATH"
+EOF
+fi
+
+export HIVE_HOME="$HOME/apache-hive-3.1.2-bin"
+export HIVE_CONF_DIR="$HIVE_HOME/conf"
+export PATH="$HIVE_HOME/bin:$PATH"
+
+echo "$HIVE_HOME"
+
+STEP 7 - FIX THE GUAVA LIBRARY COMPATIBILITY
+Ubuntu terminal:
+
+HADOOP_GUAVA=$(find "$HADOOP_HOME/share/hadoop/common/lib" -maxdepth 1 -type f -name 'guava-*.jar' -print -quit)
+
+echo "$HADOOP_GUAVA"
+
+if [ -z "$HADOOP_GUAVA" ]; then
+    echo "ERROR: Hadoop Guava JAR was not found. Check HADOOP_HOME."
+else
+    rm -f "$HIVE_HOME"/lib/guava-*.jar
+    cp "$HADOOP_GUAVA" "$HIVE_HOME/lib/"
+fi
+
+STEP 8 - CREATE HIVE CONFIGURATION
+Ubuntu terminal:
+
+mkdir -p "$HOME/hive_logs"
+
+cat > "$HIVE_HOME/conf/hive-site.xml" <<EOF
+<configuration>
+    <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>/user/hive/warehouse</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:derby:;databaseName=$HOME/metastore_db_hive312;create=true</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    </property>
+    <property>
+        <name>hive.execution.engine</name>
+        <value>mr</value>
+    </property>
+    <property>
+        <name>hive.exec.scratchdir</name>
+        <value>/tmp/hive</value>
+    </property>
+    <property>
+        <name>hive.querylog.location</name>
+        <value>$HOME/hive_logs</value>
+    </property>
+    <property>
+        <name>hive.metastore.schema.verification</name>
+        <value>false</value>
+    </property>
+</configuration>
+EOF
+
+STEP 9 - CREATE HDFS FOLDERS FOR HIVE
+Ubuntu terminal:
+
+hadoop fs -mkdir -p /tmp
+hadoop fs -mkdir -p /tmp/hive
+hadoop fs -mkdir -p /user/hive/warehouse
+
+hadoop fs -chmod 1777 /tmp
+hadoop fs -chmod 1777 /tmp/hive
+hadoop fs -chmod 777 /user/hive/warehouse
+
+hadoop fs -ls /user/hive
+
+STEP 10 - INITIALIZE THE HIVE METASTORE
+Ubuntu terminal:
+
+if [ -d "$HOME/metastore_db_hive312" ]; then
+    "$HIVE_HOME/bin/schematool" -dbType derby -info
+else
+    "$HIVE_HOME/bin/schematool" -dbType derby -initSchema
+fi
+
+STEP 11 - VERIFY HIVE INSTALLATION
+Ubuntu terminal:
+
+hive --version
+hadoop version
+hadoop fs -ls /user/hive/warehouse
+
+STEP 12 - CREATE SAMPLE CSV FILES
+Ubuntu terminal:
+
+mkdir -p "$HOME/hive_lab"
+cd "$HOME/hive_lab"
+
+cat > employees.csv <<'EOF'
+1,Arun,IT,50000
+2,Bala,HR,40000
+3,Charan,IT,60000
+4,Divya,Finance,55000
+5,Eswar,HR,45000
+EOF
+
+cat > departments.csv <<'EOF'
+IT,Ravi
+HR,Meena
+Finance,Kumar
+EOF
+
+cat employees.csv
+cat departments.csv
+
+STEP 13 - CREATE THE HIVEQL PRACTICAL FILE
+Ubuntu terminal:
+
+cat > "$HOME/hive_lab/practical.hql" <<EOF
+CREATE DATABASE IF NOT EXISTS college;
+USE college;
+
+DROP TABLE IF EXISTS employees;
+
+CREATE TABLE employees (
+    id INT,
+    name STRING,
+    department STRING,
+    salary INT
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE;
+
+LOAD DATA LOCAL INPATH '$HOME/hive_lab/employees.csv'
+OVERWRITE INTO TABLE employees;
+
+SHOW DATABASES;
+SHOW TABLES;
+DESCRIBE employees;
+
+SELECT * FROM employees;
+SELECT name, salary FROM employees;
+SELECT * FROM employees WHERE salary > 50000;
+SELECT * FROM employees ORDER BY salary DESC;
+
+SELECT department, COUNT(*) AS total_employees
+FROM employees
+GROUP BY department;
+
+SELECT department, AVG(salary) AS average_salary
+FROM employees
+GROUP BY department;
+
+DROP TABLE IF EXISTS departments;
+
+CREATE TABLE departments (
+    department STRING,
+    manager STRING
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE;
+
+LOAD DATA LOCAL INPATH '$HOME/hive_lab/departments.csv'
+OVERWRITE INTO TABLE departments;
+
+SELECT employees.id, employees.name, employees.department,
+       departments.manager
+FROM employees
+JOIN departments
+ON employees.department = departments.department;
+EOF
+
+STEP 14 - RUN THE PRACTICAL FILE
+Ubuntu terminal:
+
+hive -f "$HOME/hive_lab/practical.hql"
+
+Wait until all queries finish and the command returns to the normal Ubuntu prompt.
+
+STEP 15 - OPEN THE HIVE INTERACTIVE TERMINAL
+Ubuntu terminal:
+
+hive
+
+Wait until the prompt appears:
+
+hive>
+
+The following commands must be typed at the hive> prompt, not at the normal Ubuntu prompt.
+
+STEP 16 - PRACTISE HIVEQL INSIDE THE HIVE TERMINAL
+At the hive> prompt, type:
+
+SHOW DATABASES;
+
+USE college;
+
+SHOW TABLES;
+
+DESCRIBE employees;
+
+SELECT * FROM employees;
+
+SELECT name, salary FROM employees;
+
+SELECT * FROM employees WHERE salary > 50000;
+
+SELECT * FROM employees ORDER BY salary DESC;
+
+SELECT department, COUNT(*) FROM employees GROUP BY department;
+
+SELECT department, AVG(salary) FROM employees GROUP BY department;
+
+SELECT * FROM departments;
+
+SELECT employees.name, departments.manager
+FROM employees
+JOIN departments
+ON employees.department = departments.department;
+
+STEP 17 - EXIT THE HIVE TERMINAL
+At the hive> prompt, type:
+
+EXIT;
+
+You will return to the normal Ubuntu terminal.
+
+STEP 18 - CHECK THE DATA STORED IN HDFS
+Ubuntu terminal:
+
+hadoop fs -ls /user/hive/warehouse
+hadoop fs -ls /user/hive/warehouse/college.db
+hadoop fs -ls /user/hive/warehouse/college.db/employees
+hadoop fs -cat /user/hive/warehouse/college.db/employees/*
+
+STEP 19 - OPEN HIVE AGAIN WHENEVER REQUIRED
+Ubuntu terminal:
+
+hive
+
+Then, at the hive> prompt:
+
+USE college;
+SHOW TABLES;
+SELECT * FROM employees;
+EXIT;
+
+IMPORTANT NOTES
+
+1. These commands are for Ubuntu/Linux PCs with Hadoop 3.2.3 already installed and configured.
+2. Java 8, a working Hadoop configuration, running HDFS and a working YARN setup are required for this procedure.
+3. The Hive archive is downloaded from the Huawei Cloud URL supplied.
+4. The commands use the current user's home directory; they do not assume a fixed Linux username or a fixed Hadoop installation directory.
+5. Do not format the NameNode during Hive installation.
+6. Do not delete the metastore_db_hive312 directory after creating Hive databases.
+7. Run Linux commands at the normal Ubuntu prompt.
+8. Run SQL commands only after opening Hive and seeing the hive> prompt.
+9. End every HiveQL statement with a semicolon.
+10. If an installation or query command fails, stop and check the first ERROR message before continuing.
