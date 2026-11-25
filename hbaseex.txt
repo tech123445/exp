@@ -1,0 +1,375 @@
+HBASE 2.4.18 INSTALLATION AND PRACTICALS
+Target: Ubuntu/Linux + Hadoop 3.2.3 + Java 8
+HBase runs on HDFS. Run these steps in order in the terminal.
+Do not run these commands in Windows CMD.
+
+STEP 1 - CHECK JAVA AND HADOOP
+
+java -version
+javac -version
+hadoop version
+command -v hadoop
+
+HBase 2.4.x supports Java 8 and Hadoop 3.2.x.
+For this lab, use Java 8.
+
+If multiple Java versions are installed, select Java 8:
+
+sudo update-alternatives --config java
+sudo update-alternatives --config javac
+
+Check again:
+
+java -version
+javac -version
+
+STEP 2 - INSTALL AND START SSH
+
+sudo apt update
+sudo apt install -y openssh-server
+sudo systemctl enable --now ssh
+
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+
+if [ ! -f "$HOME/.ssh/id_rsa" ]; then
+    ssh-keygen -t rsa -b 4096 -N "" -f "$HOME/.ssh/id_rsa"
+fi
+
+touch "$HOME/.ssh/authorized_keys"
+
+if ! grep -qxF "$(cat "$HOME/.ssh/id_rsa.pub")" "$HOME/.ssh/authorized_keys"; then
+    cat "$HOME/.ssh/id_rsa.pub" >> "$HOME/.ssh/authorized_keys"
+fi
+
+chmod 600 "$HOME/.ssh/authorized_keys"
+
+ssh -o StrictHostKeyChecking=accept-new localhost "echo SSH_OK"
+
+STEP 3 - START HADOOP HDFS
+
+start-dfs.sh
+jps
+hadoop fs -ls /
+
+HDFS must be running before HBase is started.
+For the HBase Shell practicals below, YARN is not required.
+
+STEP 4 - FIND JAVA AND HADOOP PATHS
+
+JAVA_BIN=$(readlink -f "$(command -v javac)")
+export JAVA_HOME=$(dirname "$(dirname "$JAVA_BIN")")
+
+HADOOP_BIN=$(readlink -f "$(command -v hadoop)")
+export HADOOP_HOME=$(dirname "$(dirname "$HADOOP_BIN")")
+
+export HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
+
+echo "$JAVA_HOME"
+echo "$HADOOP_HOME"
+echo "$HADOOP_CONF_DIR"
+
+STEP 5 - DOWNLOAD HBASE 2.4.18
+
+cd "$HOME"
+
+wget -c https://archive.apache.org/dist/hbase/2.4.18/hbase-2.4.18-bin.tar.gz
+
+STEP 6 - EXTRACT HBASE
+
+cd "$HOME"
+
+if [ ! -d "$HOME/hbase-2.4.18" ]; then
+    tar -xzf hbase-2.4.18-bin.tar.gz
+fi
+
+ls "$HOME/hbase-2.4.18"
+ls "$HOME/hbase-2.4.18/conf"
+
+STEP 7 - SET HBASE ENVIRONMENT VARIABLES
+
+if ! grep -q '^# HBASE_2_4_18_CONFIGURATION$' "$HOME/.bashrc"; then
+    cat >> "$HOME/.bashrc" <<'EOF'
+# HBASE_2_4_18_CONFIGURATION
+export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+export HADOOP_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v hadoop)")")")"
+export HADOOP_CONF_DIR="$HADOOP_HOME/etc/hadoop"
+export HBASE_HOME="$HOME/hbase-2.4.18"
+export HBASE_CONF_DIR="$HBASE_HOME/conf"
+export PATH="$HBASE_HOME/bin:$PATH"
+EOF
+fi
+
+export HBASE_HOME="$HOME/hbase-2.4.18"
+export HBASE_CONF_DIR="$HBASE_HOME/conf"
+export PATH="$HBASE_HOME/bin:$PATH"
+
+echo "$HBASE_HOME"
+hbase version
+
+STEP 8 - CONNECT HBASE TO HADOOP CONFIGURATION
+
+cat >> "$HBASE_HOME/conf/hbase-env.sh" <<EOF
+
+export JAVA_HOME="$JAVA_HOME"
+export HBASE_MANAGES_ZK=true
+export HBASE_CLASSPATH="$HADOOP_CONF_DIR"
+EOF
+
+STEP 9 - READ HADOOP HDFS ADDRESS
+
+FS_DEFAULTFS=$(hadoop getconf -confKey fs.defaultFS)
+
+echo "$FS_DEFAULTFS"
+
+case "$FS_DEFAULTFS" in
+    hdfs://*)
+        HBASE_ROOTDIR="${FS_DEFAULTFS%/}/hbase"
+        ;;
+    *)
+        echo "ERROR: Hadoop fs.defaultFS is not an HDFS address."
+        echo "Check core-site.xml and make sure HDFS is configured."
+        exit 1
+        ;;
+esac
+
+echo "$HBASE_ROOTDIR"
+
+STEP 10 - CREATE HBASE CONFIGURATION FILE
+
+mkdir -p "$HOME/hbase-zookeeper"
+mkdir -p "$HOME/hbase-tmp"
+
+cat > "$HBASE_HOME/conf/hbase-site.xml" <<EOF
+<configuration>
+    <property>
+        <name>hbase.rootdir</name>
+        <value>$HBASE_ROOTDIR</value>
+    </property>
+
+    <property>
+        <name>hbase.cluster.distributed</name>
+        <value>true</value>
+    </property>
+
+    <property>
+        <name>hbase.zookeeper.quorum</name>
+        <value>localhost</value>
+    </property>
+
+    <property>
+        <name>hbase.zookeeper.property.clientPort</name>
+        <value>2181</value>
+    </property>
+
+    <property>
+        <name>hbase.zookeeper.property.dataDir</name>
+        <value>$HOME/hbase-zookeeper</value>
+    </property>
+
+    <property>
+        <name>hbase.tmp.dir</name>
+        <value>$HOME/hbase-tmp</value>
+    </property>
+
+    <property>
+        <name>dfs.replication</name>
+        <value>1</value>
+    </property>
+</configuration>
+EOF
+
+cat "$HBASE_HOME/conf/hbase-site.xml"
+
+STEP 11 - CHECK HDFS BEFORE STARTING HBASE
+
+hadoop fs -ls /
+hadoop fs -mkdir -p /tmp
+hadoop fs -chmod 1777 /tmp
+
+Do NOT manually create the HDFS /hbase directory.
+HBase creates its own root directory when it starts.
+
+STEP 12 - START HBASE
+
+start-hbase.sh
+
+Wait a short time, then check:
+
+sleep 10
+jps
+
+Expected HBase processes include:
+HMaster
+HRegionServer
+HQuorumPeer
+
+Hadoop processes should also remain running:
+NameNode
+DataNode
+
+STEP 13 - OPEN HBASE WEB UI
+
+Open this address in a web browser:
+
+http://localhost:16010
+
+STEP 14 - OPEN HBASE SHELL
+
+hbase shell
+
+Run the following commands INSIDE the HBase Shell.
+Do not run them at the normal Ubuntu terminal prompt.
+
+STEP 15 - BASIC HBASE SHELL COMMANDS
+
+status
+version
+list
+whoami
+
+STEP 16 - CREATE A STUDENT TABLE
+
+create 'student', 'info'
+
+STEP 17 - INSERT STUDENT RECORDS
+
+put 'student', '1', 'info:name', 'Arun'
+put 'student', '1', 'info:department', 'AI&DS'
+put 'student', '1', 'info:city', 'Chennai'
+
+put 'student', '2', 'info:name', 'Bala'
+put 'student', '2', 'info:department', 'CSE'
+put 'student', '2', 'info:city', 'Coimbatore'
+
+put 'student', '3', 'info:name', 'Divya'
+put 'student', '3', 'info:department', 'IT'
+put 'student', '3', 'info:city', 'Salem'
+
+STEP 18 - DISPLAY STUDENT RECORDS
+
+list
+describe 'student'
+scan 'student'
+
+STEP 19 - GET A PARTICULAR STUDENT
+
+get 'student', '1'
+
+get 'student', '2', 'info:name'
+
+STEP 20 - DISPLAY SELECTED COLUMNS
+
+scan 'student', {COLUMNS => ['info:name', 'info:department']}
+
+STEP 21 - COUNT STUDENT RECORDS
+
+count 'student'
+
+STEP 22 - UPDATE A STUDENT RECORD
+
+put 'student', '1', 'info:city', 'Bengaluru'
+
+get 'student', '1'
+
+STEP 23 - DELETE A COLUMN VALUE
+
+delete 'student', '2', 'info:city'
+
+get 'student', '2'
+
+STEP 24 - CREATE AN EMPLOYEE TABLE
+
+create 'employee', 'personal', 'work'
+
+put 'employee', '101', 'personal:name', 'Kumar'
+put 'employee', '101', 'work:department', 'HR'
+put 'employee', '101', 'work:salary', '40000'
+
+put 'employee', '102', 'personal:name', 'Meena'
+put 'employee', '102', 'work:department', 'Finance'
+put 'employee', '102', 'work:salary', '50000'
+
+put 'employee', '103', 'personal:name', 'Ravi'
+put 'employee', '103', 'work:department', 'IT'
+put 'employee', '103', 'work:salary', '60000'
+
+scan 'employee'
+get 'employee', '101'
+count 'employee'
+describe 'employee'
+
+STEP 25 - DISABLE AND ENABLE A TABLE
+
+disable 'student'
+is_disabled 'student'
+
+enable 'student'
+is_enabled 'student'
+
+STEP 26 - DELETE A COMPLETE ROW
+
+deleteall 'student', '3'
+
+scan 'student'
+
+STEP 27 - DELETE A TABLE (OPTIONAL)
+
+disable 'employee'
+drop 'employee'
+
+list
+
+To remove the student table also, run:
+
+disable 'student'
+drop 'student'
+
+STEP 28 - EXIT HBASE SHELL
+
+exit
+
+STEP 29 - CHECK HBASE DATA IN HDFS
+
+hadoop fs -ls /hbase
+hadoop fs -ls /hbase/data
+
+HBase manages the files inside its HDFS root directory.
+Do not manually edit or delete HBase data files.
+
+STEP 30 - STOP HBASE
+
+stop-hbase.sh
+
+sleep 5
+jps
+
+STEP 31 - STOP HADOOP (ONLY WHEN FINISHED)
+
+stop-dfs.sh
+jps
+
+STEP 32 - VIEW HBASE LOGS IF STARTUP FAILS
+
+ls "$HBASE_HOME/logs"
+
+LATEST_LOG=$(find "$HBASE_HOME/logs" -type f -name '*master*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+
+if [ -n "$LATEST_LOG" ]; then
+    tail -n 80 "$LATEST_LOG"
+fi
+
+IMPORTANT NOTES
+
+1. These commands are for Ubuntu/Linux PCs with Hadoop 3.2.3 already installed.
+2. Use Java 8 for this lab setup.
+3. HDFS must be running before HBase starts.
+4. HBase starts and manages its own ZooKeeper in this setup.
+5. Do not start a separate ZooKeeper service on port 2181 at the same time.
+6. YARN is not required for the HBase Shell practicals.
+7. Do not format the NameNode during HBase installation.
+8. Do not manually create the HDFS /hbase directory before first startup.
+9. Do not delete the /hbase directory while HBase is running.
+10. HBase 2.4 is an end-of-maintenance release line. Use this version for a matching lab environment, not for a new production deployment.
+11. HBase 2.4.x supports Hadoop 3.2.x and Java 8 according to the Apache compatibility documentation.
+12. If a table already exists, do not run its CREATE command again. Use list to check existing tables.
