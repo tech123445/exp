@@ -1,0 +1,141 @@
+hadoop version
+python3 --version
+hadoop fs -ls /
+
+start-dfs.sh
+start-yarn.sh
+jps
+
+mkdir -p ~/matrix_lab
+cd ~/matrix_lab
+
+cat > matrixA.txt <<'EOF'
+A 0 0 1
+A 0 1 2
+A 1 0 3
+A 1 1 4
+EOF
+
+cat > matrixB.txt <<'EOF'
+B 0 0 5
+B 0 1 6
+B 1 0 7
+B 1 1 8
+EOF
+
+cat > mapper.py <<'PY'
+import sys
+
+for line in sys.stdin:
+    fields = line.split()
+
+    if not fields:
+        continue
+
+    if len(fields) != 4:
+        raise ValueError("Invalid matrix input: " + line)
+
+    matrix, i, j, value = fields
+
+    i = int(i)
+    j = int(j)
+    value = int(value)
+
+    if not (0 <= i < 2 and 0 <= j < 2):
+        raise ValueError("Invalid matrix index")
+
+    if matrix == 'A':
+        for k in range(2):
+            print(f"{i},{k}\tA,{j},{value}")
+
+    elif matrix == 'B':
+        for k in range(2):
+            print(f"{k},{j}\tB,{i},{value}")
+
+    else:
+        raise ValueError("Unknown matrix name: " + matrix)
+PY
+
+cat > reducer.py <<'PY'
+import sys
+
+def calculate(key, A, B):
+    result = sum(
+        A.get(j, 0) * B.get(j, 0)
+        for j in range(2)
+    )
+    print(f"{key}\t{result}")
+
+
+current_key = None
+A = {}
+B = {}
+
+for line in sys.stdin:
+    line = line.rstrip("\r\n")
+
+    if not line:
+        continue
+
+    key, value = line.split("\t", 1)
+    matrix, j, number = value.split(",")
+
+    j = int(j)
+    number = int(number)
+
+    if current_key is not None and key != current_key:
+        calculate(current_key, A, B)
+        A = {}
+        B = {}
+
+    current_key = key
+
+    if matrix == 'A':
+        A[j] = number
+    else:
+        B[j] = number
+
+if current_key is not None:
+    calculate(current_key, A, B)
+PY
+
+chmod +x mapper.py reducer.py
+
+cat matrixA.txt matrixB.txt | python3 mapper.py | LC_ALL=C sort | python3 reducer.py
+
+if [ -z "${HADOOP_HOME:-}" ]; then
+    HADOOP_BIN=$(readlink -f "$(command -v hadoop)")
+    HADOOP_HOME=$(dirname "$(dirname "$HADOOP_BIN")")
+fi
+
+export HADOOP_HOME
+
+STREAMING_JAR=$(find "$HADOOP_HOME" -type f -name 'hadoop-streaming*.jar' ! -name '*-sources.jar' ! -path '*/sources/*' -print -quit 2>/dev/null)
+
+echo "$STREAMING_JAR"
+
+if [ -z "$STREAMING_JAR" ]; then
+    echo "ERROR: Hadoop Streaming binary JAR not found."
+else
+    echo "Hadoop Streaming JAR found successfully."
+fi
+
+hadoop fs -mkdir -p /input
+
+hadoop fs -put -f matrixA.txt /input/
+hadoop fs -put -f matrixB.txt /input/
+
+hadoop fs -ls /input
+
+hadoop fs -rm -r -f /output
+
+hadoop jar "$STREAMING_JAR" \
+-D mapreduce.job.reduces=1 \
+-files "$PWD/mapper.py,$PWD/reducer.py" \
+-mapper "python3 mapper.py" \
+-reducer "python3 reducer.py" \
+-input /input \
+-output /output
+
+hadoop fs -ls /output
+hadoop fs -cat /output/part-*
